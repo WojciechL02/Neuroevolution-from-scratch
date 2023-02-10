@@ -67,6 +67,7 @@ class EvolutionaryOptimizer:
             self.find_best_individual()
             print(self._best_individual)
 
+    # DO POPRAWY - zrobic jedną funkcję
     def rate_mutant(self, individual: object, parent: object, data: torch.tensor, labels: torch.tensor) -> None:
         with torch.no_grad():
             torch.nn.utils.vector_to_parameters(individual.get_parameters(), self._model.parameters())
@@ -88,7 +89,7 @@ class EvolutionaryOptimizer:
                 self._best_individual = individual
 
     def mutate(self, selected, data, labels):
-        mutants = copy.deepcopy(selected)
+        mutants = copy.deepcopy(selected)  # DO POPRAWY
         for i, individual in enumerate(mutants):
             if (torch.rand(1).item() < self.mutation_prob):
                 old_parameters = individual.get_parameters()
@@ -98,8 +99,8 @@ class EvolutionaryOptimizer:
         return mutants
 
     def elitist_succession(self, mutants):
-        new_population = sorted(self._population)[:self.elite_size]
-        new_population.extend(sorted(mutants)[:-self.elite_size])
+        new_population = sorted(self._population)[:self.elite_size]  # DO POPRAWY
+        new_population.extend(sorted(mutants)[:-self.elite_size])  # DO POPRAWY
         self._population = new_population
 
     def tournament_selection(self):
@@ -108,12 +109,6 @@ class EvolutionaryOptimizer:
 
 
 def main():
-
-    # model = MLP(3, 2, 1, 4)
-    # for p in model.parameters():
-    #     p.requires_grad = False
-    # params = torch.nn.utils.parameters_to_vector(model.parameters())
-    # params += 1e-3
 
     model = MLP(1, 3, 1, 2)
     for p in model.parameters():
