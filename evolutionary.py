@@ -1,51 +1,32 @@
-import copy
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from nn import MLP
 
 
-class Individual:
-    def __init__(self, parameters: torch.tensor) -> None:
-        self._parameters = parameters
-        self._rating = None
-
-    def get_parameters(self) -> torch.tensor:
-        return self._parameters
-
-    def set_parameters(self, new_parameters: torch.tensor) -> None:
-        self._parameters = new_parameters
-
-    def get_rating(self) -> float:
-        return self._rating
-
-    def set_rating(self, new_rating: float) -> None:
-        self._rating = new_rating
-
-    def __lt__(self, other: object) -> bool:
-        return self._rating < other.get_rating()
-
-    def __eq__(self, other: object) -> bool:
-        return self._rating == other.get_rating()
-
-    def __str__(self) -> str:
-        return f"params: {self._parameters}\nrating: {self._rating}"
-
-
 class EvolutionaryOptimizer:
-    def __init__(self, model, criterion, device: str, inheritance_decay: float, mutation_prob: float, mutation_power: float, elite_size: int=1) -> None:
+    def __init__(self, model, criterion, device: str, pop_size: int, inheritance_decay: float, mutation_prob: float, mutation_power: float) -> None:
         self._model = model
+        self._model.eval()
         self._criterion = criterion
         self._device = device
         self._population = None
-        self._best_individual = None
+        self._ratings = None
+        self._best_individual_idx = 0
+        self._n_params = None
+        self.pop_size = pop_size
         self.inheritance_decay = inheritance_decay
         self.mutation_prob = mutation_prob
         self.mutation_power = mutation_power
-        self.elite_size = elite_size
 
-    def evolution(self, data_loader, start_population) -> None:
-        self._population = start_population
+    def evolution(self, data_loader, model_params: torch.tensor) -> None:
+        self._n_params = model_params.shape[0]
+        self._population = torch.empty(size=(self.pop_size, self._n_params), device=self._device)
+        self._ratings = torch.empty(size=(self.pop_size,), device=self._device)
+        self._population[0] = model_params
+        for i in range(1, self.pop_size):
+            self._population[i] = model_params + torch.normal(0, 1, size=(self._n_params,), device=self._device)
+
         first_iter = True
 
         for i, sample in enumerate(data_loader):
@@ -54,58 +35,60 @@ class EvolutionaryOptimizer:
             labels = torch.empty(1, dtype=torch.long).random_(2)[0]
 
             if (first_iter):
-                for individual in self._population:
-                    self.rate_individual(individual, data, labels)
-                self._best_individual = start_population[0]
+                for idx, individual in enumerate(self._population):
+                    rating = self.rate_individual(individual, data, labels)
+                    self._ratings[idx] = rating
                 self.find_best_individual()
                 first_iter = False
 
-            selected = self.tournament_selection()
-            mutants = self.mutate(selected, data, labels)
+            selected, selected_ratings = self.tournament_selection()
+            mutants, mutants_ratings, worst_mutant_idx = self.mutate(selected, selected_ratings, data, labels)
 
-            self.elitist_succession(mutants)
+            self.elitist_succession(mutants, mutants_ratings, worst_mutant_idx)
             self.find_best_individual()
-            print(self._best_individual)
+            print(self._population[self._best_individual_idx])
+            print(self._ratings[self._best_individual_idx], "\n")
 
-    # DO POPRAWY - zrobic jedną funkcję
-    def rate_mutant(self, individual: object, parent: object, data: torch.tensor, labels: torch.tensor) -> None:
+    def rate_individual(self, individual: torch.tensor, data: torch.tensor, labels: torch.tensor, parent_rating: float=None) -> None:
         with torch.no_grad():
-            torch.nn.utils.vector_to_parameters(individual.get_parameters(), self._model.parameters())
+            torch.nn.utils.vector_to_parameters(individual, self._model.parameters())
             output = self._model(data)
             loss = self._criterion(output, labels).item()
-            rating = loss + (parent.get_rating() * (1 - self.inheritance_decay))
-            individual.set_rating(rating)
-
-    def rate_individual(self, individual, data, labels):
-        with torch.no_grad():
-            torch.nn.utils.vector_to_parameters(individual.get_parameters(), self._model.parameters())
-            output = self._model(data)
-            loss = self._criterion(output, labels).item()
-            individual.set_rating(loss)
+            if (parent_rating):
+                return loss + (parent_rating * (1 - self.inheritance_decay))
+            return loss
 
     def find_best_individual(self) -> None:
-        for individual in self._population:
-            if (individual < self._best_individual):
-                self._best_individual = individual
+        for i, rating in enumerate(self._ratings):
+            if (rating < self._ratings[self._best_individual_idx]):
+                self._best_individual_idx = i
 
-    def mutate(self, selected, data, labels):
-        mutants = copy.deepcopy(selected)  # DO POPRAWY
+    def mutate(self, selected, selected_ratings, data, labels):
+        mutants = selected.detach().clone()
+        mutants_ratings = selected_ratings.detach().clone()
+        worst_mutant_idx = 0
         for i, individual in enumerate(mutants):
             if (torch.rand(1).item() < self.mutation_prob):
-                old_parameters = individual.get_parameters()
-                new_parameters = old_parameters + (self.mutation_power * torch.normal(0, 1, size=(1, len(old_parameters)))[0])
-                individual.set_parameters(new_parameters)
-                self.rate_mutant(individual, selected[i], data, labels)
-        return mutants
+                parent_rating = selected_ratings[i]
+                individual += self.mutation_power * torch.normal(0, 1, size=(self._n_params,), device=self._device)
+                mutants_ratings[i] = self.rate_individual(individual, data, labels, parent_rating)
+                if (mutants_ratings[i] > mutants_ratings[worst_mutant_idx]):
+                    worst_mutant_idx = i
+        return mutants, mutants_ratings, worst_mutant_idx
 
-    def elitist_succession(self, mutants):
-        new_population = sorted(self._population)[:self.elite_size]  # DO POPRAWY
-        new_population.extend(sorted(mutants)[:-self.elite_size])  # DO POPRAWY
-        self._population = new_population
+    def elitist_succession(self, mutants, mutants_ratings, worst_mutant_idx):
+        self._population[0] = self._population[self._best_individual_idx]
+        self._ratings[0] = self._ratings[self._best_individual_idx]
+        j = 0
+        for i in range(1, self.pop_size):
+            if (j != worst_mutant_idx):
+                self._population[i] = mutants[j]
+                self._ratings[i] = mutants_ratings[j]
+            j += 1
 
     def tournament_selection(self):
         # TODO selekcja turniejowa
-        return self._population
+        return self._population, self._ratings
 
 
 def main():
@@ -115,21 +98,14 @@ def main():
         p.requires_grad = False
 
     criterion = nn.CrossEntropyLoss()
-    device = 'cpu'
+    device = ("cuda" if torch.cuda.is_available() else "cpu")
 
     dataset = torch.rand(size=(700, 2))
 
     start = torch.nn.utils.parameters_to_vector(model.parameters())
 
-    population = []
-    for _ in range(20):
-        population.append(Individual(start + torch.normal(0, 1, size=(1, len(start)))[0]))
-
-
-    optimizer = EvolutionaryOptimizer(model, criterion, device, 1e-4, 0.1, 0.8, 1)
-    optimizer.evolution(dataset, population)
-
-
+    optimizer = EvolutionaryOptimizer(model, criterion, device, 4, 1e-4, 0.7, 0.2)
+    optimizer.evolution(dataset, start)
 
 
 if __name__ == "__main__":
