@@ -7,6 +7,11 @@ from sklearn.preprocessing import MinMaxScaler
 from sklearn.model_selection import train_test_split
 
 
+import torch.nn.functional as F
+import torch.optim as optim
+from torchvision import datasets, transforms
+
+
 class EvolutionaryOptimizer:
     def __init__(self, model, criterion, device: str, epochs: int, pop_size: int, mutation_prob: float, mutation_power: float) -> None:
         self._model = model
@@ -45,8 +50,8 @@ class EvolutionaryOptimizer:
 
             self.elitist_succession(mutants, mutants_ratings, worst_mutant_idx)
             self.find_best_individual()
-            if (epoch+1) % 10 == 0:
-                print(f"Epoch {epoch+1}:\n{self._ratings[self._best_individual_idx]}")
+            # if (epoch+1) % 10 == 0:
+            print(f"Epoch {epoch+1}:\n{self._ratings[self._best_individual_idx]}")
 
         torch.nn.utils.vector_to_parameters(self._population[self._best_individual_idx], self._model.parameters())
 
@@ -165,29 +170,100 @@ def prepare_dataset():
     return X_train, X_test, y_train, y_test
 
 
+# def main():
+#     device = ("cuda" if torch.cuda.is_available() else "cpu")
+
+#     X_train, X_test, y_train, y_test = prepare_dataset()
+
+#     train_dataset = KaggleDataset(X_train, y_train)
+#     train_loader = DataLoader(train_dataset, batch_size=len(train_dataset), shuffle=True)
+
+#     test_dataset = KaggleDataset(X_test, y_test)
+#     test_loader = DataLoader(test_dataset, batch_size=len(test_dataset), shuffle=True)
+
+
+#     model = MLP(12, 7, 1, 4)
+#     for p in model.parameters():
+#         p.requires_grad = False
+#     start_params = torch.nn.utils.parameters_to_vector(model.parameters())
+#     criterion = nn.CrossEntropyLoss()
+#     optimizer = EvolutionaryOptimizer(model, criterion, device, 10, 60, 0.52, 0.4)
+
+#     optimizer.evolution(train_loader, start_params)
+#     test(model, device, criterion, test_loader)
+
+
+def nn_train(model, device, train_loader, criterion, optimizer, epoch):
+    model.train()
+    for batch_idx, (data, target) in enumerate(train_loader):
+        data, target = data.to(device), target.to(device)
+        optimizer.zero_grad()
+        data = data.view(len(data), -1)
+        output = model(data)
+        loss = criterion(output, target)
+        loss.backward()
+        optimizer.step()
+        if batch_idx % 100 == 0:
+            print(f"Epoch={epoch}, loss={loss.item():.3f}")
+
+
+def nn_test(model, device, test_loader, criterion):
+    model.eval()
+    test_loss = 0
+    correct = 0
+    with torch.no_grad():
+        for data, target in test_loader:
+            data, target = data.to(device), target.to(device)
+            data = data.view(len(data), -1)
+            output = model(data)
+            test_loss += criterion(output, target)
+            pred = output.argmax(dim=1, keepdim=True)
+            correct += pred.eq(target.view_as(pred)).sum().item()
+
+    test_loss /= len(test_loader.dataset)
+    accuracy = 100 * correct / len(test_loader.dataset)
+    print(f"TEST: Avg loss={test_loss:.4f}, Acc={accuracy:.0f}")
+
+
 def main():
-    device = ("cuda" if torch.cuda.is_available() else "cpu")
+    device = "cpu"
 
-    X_train, X_test, y_train, y_test = prepare_dataset()
+    LEARNING_RATE = 0.01
+    EPOCHS = 10
+    BATCH_SIZE = 32
 
-    train_dataset = KaggleDataset(X_train, y_train)
-    train_loader = DataLoader(train_dataset, batch_size=len(train_dataset), shuffle=True)
+    t = transforms.Compose(
+        [
+            transforms.ToTensor(),
+            transforms.Normalize((0.1307,), (0.3081,))
+        ]
+    )
+    dataset1 = datasets.MNIST("datasets/", train=True, download=False, transform=t)
+    dataset2 = datasets.MNIST("datasets/", train=False, download=False, transform=t)
 
-    test_dataset = KaggleDataset(X_test, y_test)
-    test_loader = DataLoader(test_dataset, batch_size=len(test_dataset), shuffle=True)
+
+    train_loader = torch.utils.data.DataLoader(dataset1, batch_size=32)
+    test_loader = torch.utils.data.DataLoader(dataset2, batch_size=len(dataset2))
 
 
-    model = MLP(12, 7, 1, 4)
+    model = MLP(784, 10, 1, 128)
     for p in model.parameters():
         p.requires_grad = False
     start_params = torch.nn.utils.parameters_to_vector(model.parameters())
     criterion = nn.CrossEntropyLoss()
-    optimizer = EvolutionaryOptimizer(model, criterion, device, 10, 60, 0.52, 0.4)
+    optimizer = EvolutionaryOptimizer(model, criterion, device, 5, 60, 0.52, 0.42)
 
     optimizer.evolution(train_loader, start_params)
     test(model, device, criterion, test_loader)
 
+    # optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
+    # criterion = nn.CrossEntropyLoss()
 
-if __name__ == "__main__":
+    # for epoch in range(1, EPOCHS+1):
+    #     nn_train(model, device, train_loader, criterion, optimizer, epoch)
+    #     nn_test(model, device, test_loader, criterion)
+
+
+if __name__ == '__main__':
     main()
 
