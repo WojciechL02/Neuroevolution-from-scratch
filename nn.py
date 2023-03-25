@@ -8,7 +8,7 @@ class MLP(nn.Module):
         self.layers.append(nn.Linear(input_size, n_neurons))
         self.layers.append(nn.LeakyReLU())
 
-        for _ in range(hidden_layers):
+        for _ in range(hidden_layers-1):
             self.layers.append(nn.Linear(n_neurons, n_neurons))
             self.layers.append(nn.LeakyReLU())
 
