@@ -15,30 +15,82 @@ class ESOptimizer:
     def _init_population(self) -> None:
         self.pop_weights = []
         self.pop_biases = []
-        input_size = self._model_params["input_size"]
-        hidden_size = self._model_params["hidden_size"]
-        output_size = self._model_params["output_size"]
+        self.input_size = self._model_params["input_size"]
+        self.hidden_size = self._model_params["hidden_size"]
+        self.output_size = self._model_params["output_size"]
         for i in range(self._model_params["n_hidden"]):
             if i == 0:
-                self.pop_weights.append(torch.randn(self._pop_size, input_size, hidden_size))
+                self.pop_weights.append(torch.randn(self._pop_size, self.input_size, self.hidden_size))
             else:
-                self.pop_weights.append(torch.randn(self._pop_size, hidden_size, hidden_size))
+                self.pop_weights.append(torch.randn(self._pop_size, self.hidden_size, self.hidden_size))
 
-            self.pop_biases.append(torch.randn(self._pop_size, 1, hidden_size))
+            self.pop_biases.append(torch.randn(self._pop_size, 1, self.hidden_size))
 
-        self.pop_weights.append(torch.randn(self._pop_size, hidden_size, output_size))
-        self.pop_biases.append(torch.randn(self._pop_size, 1, output_size))
+        self.pop_weights.append(torch.randn(self._pop_size, self.hidden_size, self.output_size))
+        self.pop_biases.append(torch.randn(self._pop_size, 1, self.output_size))
 
         # self.first_layers = torch.randn(2, 8, 16)
         # self.last_layers = torch.randn(2, 16, 2)
         # self.first_biases = torch.randn(2, 1, 16)
         # self.last_biases = torch.randn(2, 1, 2)
 
-    def evolution(self, data_loader) -> None:
+    def evolution(self) -> None:
 
         for epoch in range(self._epochs):
             # for i, (data, labels) in enumerate(data_loader):
             #     data, labels = data.to(self._device), labels.to(self._device)
+
+            offspring_weights = []
+            offspring_biases = []
+            mi_lambda_weights = []
+            mi_lambda_biases = []
+
+            for i in range(self._model_params["n_hidden"]):
+                l_input_size = self.pop_weights[i].size(1)
+                l_output_size = self.pop_weights[i].size(2)
+
+                # WEIGHTS
+                offspring_weights.append(self.pop_weights[i].unsqueeze(1).expand(self._pop_size, 7, l_input_size, l_output_size))
+                offspring_weights[i] = offspring_weights[i].reshape(-1, l_input_size, l_output_size)
+                # mutation
+                mutation_w = torch.rand_like(offspring_weights[i])
+                offspring_weights[i] += self._mut_pow * mutation_w
+                # crossover
+                a = torch.rand(7 * self._pop_size, l_input_size, l_output_size)
+                permutation = torch.randperm(7 * self._pop_size)
+                offspring_weights[i] = a * offspring_weights[i] + (1 - a) * offspring_weights[i][permutation]
+
+                # BIASES
+                offspring_biases.append(self.pop_biases[i].unsqueeze(1).expand(self._pop_size, 7, 1, l_output_size))
+                offspring_biases[i] = offspring_biases[i].reshape(-1, 1, l_output_size)
+                # mutation
+                mutation_w = torch.rand_like(offspring_biases[i])
+                offspring_biases[i] += self._mut_pow * mutation_w
+                # crossover
+                a = torch.rand(7 * self._pop_size, 1, l_output_size)
+                offspring_biases[i] = a * offspring_biases[i] + (1 - a) * offspring_biases[i][permutation]
+
+                # CONCATENATION MI+LAMBDA
+                mi_lambda_weights.append(torch.cat((self.pop_weights[i], offspring_weights[i]), dim=0))
+                mi_lambda_biases.append(torch.cat((self.pop_biases[i], offspring_biases[i]), dim=0))
+
+            # FORWARD THROUGH ALL MODELS
+            data = torch.randn(10, 8)
+            target = torch.randint(0, 2, size=(10,))
+
+            output = data
+            for i in range(len(offspring_weights)):
+                if i < len(offspring_weights) - 1:
+                    output = F.relu(output @ offspring_weights[i] + offspring_biases[i])
+                else:
+                    output = output @ offspring_weights[i] + offspring_biases[i]
+
+            # EVALUATION AND SELECTION OF NEW POPULATION
+            scores = torch.tensor([F.cross_entropy(model, target) for model in output])
+            _, indices = torch.topk(scores, self._pop_size)
+            self.pop_weights = [layer[indices] for layer in offspring_weights]
+            self.pop_biases = [layer[indices] for layer in offspring_biases]
+        print("AMEN")
 
 
 def main():
@@ -48,52 +100,12 @@ def main():
         "n_hidden": 1,
         "hidden_size": 16,
     }
-    optim = ESOptimizer("cpu", params, 1, 3, 1, 1)
-    mi = optim.first_layers.size(0)  # Get the size of mi
-    df = torch.randn(10, 8)
-    target = torch.randint(0, 2, size=(10,))
+    optim = ESOptimizer("cpu", params, "criterion", 3, 0.4, 2)
 
-
-    # =========================================
-    output = df @ optim.first_layers  # torch.matmul
-    output = output + optim.first_biases
-    logits = output @ optim.last_layers
-    logits = logits + optim.last_biases
-    # =========================================
-
-
-    # =========================================
-    # Repeat the tensor mi_osobnikow 7 times along a new dimension
-    expanded_mi_osobnikow = optim.first_layers.unsqueeze(1).expand(2, 7, 8, 16)
-
-    # Reshape the tensor to combine the first two dimensions (mi and 7)
-    lambda_osobnikow = expanded_mi_osobnikow.reshape(-1, 8, 16)
-
-    # TUTAJ IDZIE MUTACJA I KRZYŻOWANIE
-    # MUTACJA
-    szum = torch.rand_like(lambda_osobnikow)
-    sila_mutacji = 0.1
-    lambda_osobnikow = lambda_osobnikow + sila_mutacji * szum
-    # KRZYZOWANIE
-    a = torch.rand(14, 8, 16)
-    permutacja = torch.randperm(7*mi)
-    # print(permutacja)
-    lambda_osobnikow = a * lambda_osobnikow + (1 - a) * lambda_osobnikow[permutacja]
-    # =========================================
-
-    mi_lambda_osobnikow = torch.cat((optim.first_layers, lambda_osobnikow), dim=0)
-
-    # =========================================
-    # TUTAJ IDZIE OCENA
-    scores = torch.randn(8*mi)
-
-    _, indices = torch.topk(scores, mi)
-    nowa_populacja = mi_lambda_osobnikow[indices]
-    # print(nowa_populacja.shape)
-    # =========================================
-
-
+    optim.evolution()
 
 
 if __name__ == "__main__":
     main()
+
+
