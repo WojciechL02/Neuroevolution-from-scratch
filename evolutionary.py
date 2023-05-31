@@ -29,83 +29,60 @@ class ESOptimizer:
         self.pop_weights.append(torch.randn(self._pop_size, self.hidden_size, self.output_size))
         self.pop_biases.append(torch.randn(self._pop_size, 1, self.output_size))
 
-        # self.first_layers = torch.randn(2, 8, 16)
-        # self.last_layers = torch.randn(2, 16, 2)
-        # self.first_biases = torch.randn(2, 1, 16)
-        # self.last_biases = torch.randn(2, 1, 2)
+    def evolution(self, data_loader) -> None:
 
-    def evolution(self) -> None:
-
+        scores_history = []
         for epoch in range(self._epochs):
-            # for i, (data, labels) in enumerate(data_loader):
-            #     data, labels = data.to(self._device), labels.to(self._device)
+            for i, (data, target) in enumerate(data_loader):
+                data, target = data.to(self._device), target.to(self._device)
 
-            offspring_weights = []
-            offspring_biases = []
-            mi_lambda_weights = []
-            mi_lambda_biases = []
+                self.mi_lambda_weights = []
+                self.mi_lambda_biases = []
 
-            for i in range(self._model_params["n_hidden"]):
-                l_input_size = self.pop_weights[i].size(1)
-                l_output_size = self.pop_weights[i].size(2)
+                output = data
+                for i in range(len(self.pop_weights)):
+                    l_input_size = self.pop_weights[i].size(1)
+                    l_output_size = self.pop_weights[i].size(2)
 
-                # WEIGHTS
-                offspring_weights.append(self.pop_weights[i].unsqueeze(1).expand(self._pop_size, 7, l_input_size, l_output_size))
-                offspring_weights[i] = offspring_weights[i].reshape(-1, l_input_size, l_output_size)
-                # mutation
-                mutation_w = torch.rand_like(offspring_weights[i])
-                offspring_weights[i] += self._mut_pow * mutation_w
-                # crossover
-                a = torch.rand(7 * self._pop_size, l_input_size, l_output_size)
-                permutation = torch.randperm(7 * self._pop_size)
-                offspring_weights[i] = a * offspring_weights[i] + (1 - a) * offspring_weights[i][permutation]
+                    offspring_weights = self._mutate_layers(self.pop_weights[i], l_input_size, l_output_size)
+                    offspring_biases = self._mutate_layers(self.pop_biases[i], 1, l_output_size)
 
-                # BIASES
-                offspring_biases.append(self.pop_biases[i].unsqueeze(1).expand(self._pop_size, 7, 1, l_output_size))
-                offspring_biases[i] = offspring_biases[i].reshape(-1, 1, l_output_size)
-                # mutation
-                mutation_w = torch.rand_like(offspring_biases[i])
-                offspring_biases[i] += self._mut_pow * mutation_w
-                # crossover
-                a = torch.rand(7 * self._pop_size, 1, l_output_size)
-                offspring_biases[i] = a * offspring_biases[i] + (1 - a) * offspring_biases[i][permutation]
+                    # CONCATENATION MI+LAMBDA
+                    self.mi_lambda_weights.append(torch.cat((self.pop_weights[i], offspring_weights), dim=0))
+                    self.mi_lambda_biases.append(torch.cat((self.pop_biases[i], offspring_biases), dim=0))
 
-                # CONCATENATION MI+LAMBDA
-                mi_lambda_weights.append(torch.cat((self.pop_weights[i], offspring_weights[i]), dim=0))
-                mi_lambda_biases.append(torch.cat((self.pop_biases[i], offspring_biases[i]), dim=0))
+                    # FORWARD
+                    if i < len(self.mi_lambda_weights) - 1:
+                        output = F.relu(output @ self.mi_lambda_weights[i] + self.mi_lambda_biases[i])
+                    else:
+                        output = output @ self.mi_lambda_weights[i] + self.mi_lambda_biases[i]
 
-            # FORWARD THROUGH ALL MODELS
-            data = torch.randn(10, 8)
-            target = torch.randint(0, 2, size=(10,))
+                # EVALUATION AND SELECTION OF NEW POPULATION
+                with torch.no_grad():
+                    scores = torch.tensor([F.cross_entropy(model, target) for model in output])
+                    top_scores, indices = torch.topk(scores, self._pop_size, largest=False)
+                    scores_history.append(top_scores.mean())
 
-            output = data
-            for i in range(len(offspring_weights)):
-                if i < len(offspring_weights) - 1:
-                    output = F.relu(output @ offspring_weights[i] + offspring_biases[i])
-                else:
-                    output = output @ offspring_weights[i] + offspring_biases[i]
+                    for i in range(len(self.mi_lambda_weights)):
+                        self.pop_weights[i] = self.mi_lambda_weights[i][indices]
+                        self.pop_biases[i] = self.mi_lambda_biases[i][indices]
+        return scores_history
 
-            # EVALUATION AND SELECTION OF NEW POPULATION
-            scores = torch.tensor([F.cross_entropy(model, target) for model in output])
-            _, indices = torch.topk(scores, self._pop_size)
-            self.pop_weights = [layer[indices] for layer in offspring_weights]
-            self.pop_biases = [layer[indices] for layer in offspring_biases]
-        print("AMEN")
+    def _mutate_layers(self, layers, l_input_size, l_output_size) -> torch.tensor:
+        expanded_pop = layers.unsqueeze(1).expand(self._pop_size, 7, l_input_size, l_output_size)
+        expanded_pop = expanded_pop.reshape(-1, l_input_size, l_output_size)
+        # mutation
+        mutation_w = torch.rand_like(expanded_pop)
+        expanded_pop += self._mut_pow * mutation_w
+        # crossover
+        a = torch.rand(7 * self._pop_size, l_input_size, l_output_size)
+        permutation = torch.randperm(7 * self._pop_size)
+        expanded_pop = a * expanded_pop + (1 - a) * expanded_pop[permutation]
+        return expanded_pop
 
-
-def main():
-    params = {
-        "input_size": 8,
-        "output_size": 2,
-        "n_hidden": 1,
-        "hidden_size": 16,
-    }
-    optim = ESOptimizer("cpu", params, "criterion", 3, 0.4, 2)
-
-    optim.evolution()
-
-
-if __name__ == "__main__":
-    main()
-
-
+    def get_best_model(self) -> list:
+        model = []
+        for i in range(len(self.pop_weights)):
+            model.append(self.pop_weights[i][0])
+            model.append(self.pop_biases[i][0])
+        return model
