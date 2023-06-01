@@ -22,7 +22,7 @@ def main():
     train_dataset = CustomDataset(X_train, y_train.to_numpy())
     test_dataset = CustomDataset(X_test, y_test.to_numpy())
 
-    train_loader = DataLoader(train_dataset, batch_size=256, shuffle=True)
+    train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=128, shuffle=True)
 
     device = ("cuda" if torch.cuda.is_available() else "cpu")
@@ -30,10 +30,11 @@ def main():
         "input_size": 8,
         "output_size": 4,
         "n_hidden": 1,
-        "hidden_size": 16,
+        "hidden_size": 32,
     }
-    EPOCHS = 60
-    optimizer = ESOptimizer(device, model_params, "criterion", pop_size=200, mut_pow=0.62, n_epochs=EPOCHS)
+    EPOCHS = 50
+    criterion = nn.CrossEntropyLoss()
+    optimizer = ESOptimizer(device, model_params, criterion, pop_size=600, mut_pow=0.32, n_epochs=EPOCHS)
     history = optimizer.evolution(train_loader)
 
     plt.plot(range(len(history)), history)
@@ -46,7 +47,6 @@ def main():
 
     model = nn.Sequential()
 
-    # Iterate over the list and add linear layers to the model
     for i in range(0, len(parameters), 2):
         weight = parameters[i]
         bias = parameters[i + 1]
