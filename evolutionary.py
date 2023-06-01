@@ -3,7 +3,7 @@ import torch.nn.functional as F
 
 
 class ESOptimizer:
-    def __init__(self, device, model_params, criterion, pop_size, mut_pow, n_epochs) -> None:
+    def __init__(self, device: str, model_params: dict, criterion: object, pop_size: int, mut_pow: float, n_epochs: int) -> None:
         self._model_params = model_params
         self._criterion = criterion
         self._device = device
@@ -20,19 +20,20 @@ class ESOptimizer:
         self.output_size = self._model_params["output_size"]
         for i in range(self._model_params["n_hidden"]):
             if i == 0:
-                self.pop_weights.append(torch.randn(self._pop_size, self.input_size, self.hidden_size))
+                self.pop_weights.append(torch.randn(self._pop_size, self.input_size, self.hidden_size, device=self._device))
             else:
-                self.pop_weights.append(torch.randn(self._pop_size, self.hidden_size, self.hidden_size))
+                self.pop_weights.append(torch.randn(self._pop_size, self.hidden_size, self.hidden_size, device=self._device))
 
-            self.pop_biases.append(torch.randn(self._pop_size, 1, self.hidden_size))
+            self.pop_biases.append(torch.randn(self._pop_size, 1, self.hidden_size, device=self._device))
 
-        self.pop_weights.append(torch.randn(self._pop_size, self.hidden_size, self.output_size))
-        self.pop_biases.append(torch.randn(self._pop_size, 1, self.output_size))
+        self.pop_weights.append(torch.randn(self._pop_size, self.hidden_size, self.output_size, device=self._device))
+        self.pop_biases.append(torch.randn(self._pop_size, 1, self.output_size, device=self._device))
 
     def evolution(self, data_loader) -> None:
 
         scores_history = []
         for epoch in range(self._epochs):
+            epoch_scores = []
             for i, (data, target) in enumerate(data_loader):
                 data, target = data.to(self._device), target.to(self._device)
 
@@ -59,23 +60,24 @@ class ESOptimizer:
 
                 # EVALUATION AND SELECTION OF NEW POPULATION
                 with torch.no_grad():
-                    scores = torch.tensor([F.cross_entropy(model, target) for model in output])
+                    scores = torch.tensor([self._criterion(model, target) for model in output])
                     top_scores, indices = torch.topk(scores, self._pop_size, largest=False)
-                    scores_history.append(top_scores.mean())
+                    epoch_scores.append(top_scores.mean())
 
                     for i in range(len(self.mi_lambda_weights)):
                         self.pop_weights[i] = self.mi_lambda_weights[i][indices]
                         self.pop_biases[i] = self.mi_lambda_biases[i][indices]
+            scores_history.append(sum(epoch_scores) / len(epoch_scores))
         return scores_history
 
-    def _mutate_layers(self, layers, l_input_size, l_output_size) -> torch.tensor:
+    def _mutate_layers(self, layers: torch.tensor, l_input_size: int, l_output_size: int) -> torch.tensor:
         expanded_pop = layers.unsqueeze(1).expand(self._pop_size, 7, l_input_size, l_output_size)
         expanded_pop = expanded_pop.reshape(-1, l_input_size, l_output_size)
         # mutation
-        mutation_w = torch.rand_like(expanded_pop)
+        mutation_w = torch.rand_like(expanded_pop, device=self._device)
         expanded_pop += self._mut_pow * mutation_w
         # crossover
-        a = torch.rand(7 * self._pop_size, l_input_size, l_output_size)
+        a = torch.rand(7 * self._pop_size, l_input_size, l_output_size, device=self._device)
         permutation = torch.randperm(7 * self._pop_size)
         expanded_pop = a * expanded_pop + (1 - a) * expanded_pop[permutation]
         return expanded_pop
